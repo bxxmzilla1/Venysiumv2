@@ -1,84 +1,121 @@
-import { ApiEndpoint, ApiResponse } from '../types'
+import { Account, Chat, Contact, MeData, Message, Workspace } from '../types/api'
 
-const BASE_URL = 'https://api.entergram.com'
+const BASE = 'https://api.entergram.com'
 
-interface CallApiOptions {
-  endpoint: ApiEndpoint
-  formValues: Record<string, string>
-  apiKey: string
+export class ApiError extends Error {
+  status: number
+  body: unknown
+  constructor(message: string, status: number, body: unknown) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+    this.body = body
+  }
 }
 
-export async function callApi({ endpoint, formValues, apiKey }: CallApiOptions): Promise<ApiResponse> {
-  const pathParams: Record<string, string> = {}
-  const queryParams: Record<string, string> = {}
-  const bodyParams: Record<string, unknown> = {}
-
-  for (const param of endpoint.params) {
-    const raw = formValues[param.name]
-    if (!raw && raw !== '0') continue
-
-    if (param.in === 'path') {
-      pathParams[param.name] = raw
-    } else if (param.in === 'query') {
-      queryParams[param.name] = raw
-    } else if (param.in === 'body') {
-      if (param.type === 'integer') {
-        bodyParams[param.name] = parseInt(raw, 10)
-      } else if (param.type === 'boolean') {
-        bodyParams[param.name] = raw === 'true'
-      } else if (param.type === 'array') {
-        bodyParams[param.name] = raw.split(',').map((s) => s.trim()).filter(Boolean)
-      } else {
-        try {
-          bodyParams[param.name] = JSON.parse(raw)
-        } catch {
-          bodyParams[param.name] = raw
-        }
-      }
-    }
-  }
-
-  let url = endpoint.path
-  for (const [key, value] of Object.entries(pathParams)) {
-    url = url.replace(`{${key}}`, encodeURIComponent(value))
-  }
-
-  const qs = new URLSearchParams(queryParams).toString()
-  const fullUrl = `${BASE_URL}${url}${qs ? `?${qs}` : ''}`
-
+async function request<T>(path: string, apiKey: string, init?: RequestInit): Promise<T> {
   const headers: Record<string, string> = { 'X-API-Key': apiKey }
-  let body: string | undefined
+  if (init?.body) headers['Content-Type'] = 'application/json'
 
-  const hasBody = endpoint.method !== 'GET' && endpoint.method !== 'DELETE'
-  if (hasBody && Object.keys(bodyParams).length > 0) {
-    headers['Content-Type'] = 'application/json'
-    body = JSON.stringify(bodyParams)
-  }
+  const res = await fetch(`${BASE}${path}`, {
+    ...init,
+    headers: { ...headers, ...(init?.headers as Record<string, string> | undefined) },
+  })
 
-  const start = performance.now()
+  if (res.status === 204) return undefined as T
 
+  let body: unknown
   try {
-    const res = await fetch(fullUrl, { method: endpoint.method, headers, body })
-    const duration = Math.round(performance.now() - start)
-
-    let data: unknown
-    const ct = res.headers.get('content-type') ?? ''
-    if (ct.includes('application/json')) {
-      data = await res.json()
-    } else {
-      data = await res.text()
-    }
-
-    return { status: res.status, statusText: res.statusText, data, duration }
-  } catch (err) {
-    const duration = Math.round(performance.now() - start)
-    const message = err instanceof Error ? err.message : 'Unknown network error'
-    return {
-      status: 0,
-      statusText: 'Network Error',
-      data: null,
-      duration,
-      error: `${message}. This may be a CORS issue — the Entergram API must allow requests from this origin.`,
-    }
+    body = await res.json()
+  } catch {
+    body = { detail: res.statusText }
   }
+
+  if (!res.ok) {
+    const msg = (body as { detail?: string })?.detail ?? res.statusText
+    throw new ApiError(msg, res.status, body)
+  }
+
+  return body as T
+}
+
+function qs(params?: Record<string, string | number | boolean | undefined | null>): string {
+  if (!params) return ''
+  const p = new URLSearchParams()
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== null && v !== '') p.set(k, String(v))
+  }
+  const s = p.toString()
+  return s ? '?' + s : ''
+}
+
+type ListResp<T> = { data: { items?: T[]; hasMore?: boolean } }
+
+export const api = {
+  getMe: (key: string) =>
+    request<{ data: MeData }>('/v1/me', key).then((r) => r.data),
+
+  getWorkspace: (key: string) =>
+    request<{ data: Workspace }>('/v1/workspace', key).then((r) => r.data),
+
+  getAccounts: (key: string) =>
+    request<ListResp<Account>>('/v1/accounts', key).then((r) => r.data.items ?? []),
+
+  listChats: (key: string, params?: { limit?: number; offset?: number }) =>
+    request<ListResp<Chat>>('/v1/chats' + qs(params), key).then((r) => r.data.items ?? []),
+
+  getChat: (key: string, chatId: string) =>
+    request<{ data: Chat }>(`/v1/chats/${encodeURIComponent(chatId)}`, key).then((r) => r.data),
+
+  listMessages: (
+    key: string,
+    chatId: string,
+    params?: { account_id?: string; limit?: number; before_message_id?: number },
+  ) =>
+    request<{ data: { items?: Message[]; hasMore?: boolean; accountId?: string; chatId?: string } }>(
+      `/v1/chats/${encodeURIComponent(chatId)}/messages` + qs(params),
+      key,
+    ).then((r) => r.data.items ?? []),
+
+  sendMessage: (
+    key: string,
+    chatId: string,
+    body: {
+      accountId: string
+      idempotencyKey: string
+      text: string
+      parseMode?: string
+      replyToMessageId?: number
+    },
+  ) =>
+    request<{ data: unknown }>(`/v1/chats/${encodeURIComponent(chatId)}/messages`, key, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  editMessage: (
+    key: string,
+    chatId: string,
+    messageId: number,
+    body: { accountId: string; text: string; parseMode?: string },
+  ) =>
+    request<void>(`/v1/chats/${encodeURIComponent(chatId)}/messages/${messageId}`, key, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+
+  deleteMessage: (
+    key: string,
+    chatId: string,
+    messageId: number,
+    params?: { account_id?: string; revoke?: boolean },
+  ) =>
+    request<void>(
+      `/v1/chats/${encodeURIComponent(chatId)}/messages/${messageId}` + qs(params),
+      key,
+      { method: 'DELETE' },
+    ),
+
+  listContacts: (key: string, params?: { limit?: number; offset?: number; search?: string }) =>
+    request<ListResp<Contact>>('/v1/contacts' + qs(params), key).then((r) => r.data.items ?? []),
 }
