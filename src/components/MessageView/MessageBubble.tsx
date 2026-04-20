@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Check, CheckCheck, Pencil, Trash2, X, CornerDownRight } from 'lucide-react'
+import { Check, CheckCheck, Pencil, Trash2, X, Reply } from 'lucide-react'
 import { Message } from '../../types/api'
 import { useApp } from '../../context/AppContext'
 import clsx from 'clsx'
@@ -8,102 +8,123 @@ function formatTime(iso: string): string {
   return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
-function renderText(text: string | null): string {
-  return text ?? ''
+/** True if this message is consecutive with the previous one (same direction, <5 min gap) */
+export function isGroupedWith(msg: Message, prev?: Message): boolean {
+  if (!prev) return false
+  if (msg.isOut !== prev.isOut) return false
+  if (msg.actionType || prev.actionType) return false
+  return new Date(msg.date).getTime() - new Date(prev.date).getTime() < 5 * 60 * 1000
+}
+
+/** True if this message is the LAST in its group (tail bubble) */
+export function isTailBubble(msg: Message, next?: Message): boolean {
+  if (!next) return true
+  if (msg.isOut !== next.isOut) return true
+  if (msg.actionType || next.actionType) return true
+  return new Date(next.date).getTime() - new Date(msg.date).getTime() >= 5 * 60 * 1000
 }
 
 interface Props {
   message: Message
   prevMessage?: Message
-  onReply?: (msg: Message) => void
+  nextMessage?: Message
+  onReply: (msg: Message) => void
 }
 
-export function MessageBubble({ message, prevMessage, onReply }: Props) {
+export function MessageBubble({ message, prevMessage, nextMessage, onReply }: Props) {
   const { editMessage, deleteMessage } = useApp()
-  const [hovering, setHovering] = useState(false)
+  const [hovered, setHovered] = useState(false)
   const [editing, setEditing] = useState(false)
   const [editText, setEditText] = useState(message.text ?? '')
   const [showDeleteMenu, setShowDeleteMenu] = useState(false)
 
   const isOut = message.isOut
   const isAction = !!message.actionType
-  const showAvatar = !prevMessage || prevMessage.isOut !== message.isOut
+  const grouped = isGroupedWith(message, prevMessage)
+  const tail = isTailBubble(message, nextMessage)
 
   async function submitEdit() {
-    if (!editText.trim() || editText === message.text) {
-      setEditing(false)
-      return
-    }
-    await editMessage(message.id, editText.trim())
+    const trimmed = editText.trim()
+    if (!trimmed || trimmed === message.text) { setEditing(false); return }
+    await editMessage(message.id, trimmed)
     setEditing(false)
   }
 
+  // ── Service / action message ──────────────────────────────────────────────
   if (isAction) {
     return (
-      <div className="flex justify-center my-1 px-4">
-        <span className="bg-[#182533] text-[#708499] text-xs px-3 py-1 rounded-full">
+      <div className="flex justify-center py-1 px-4">
+        <span className="bg-[#182533]/80 text-[#708499] text-xs px-3 py-1 rounded-full">
           {message.actionType}
         </span>
       </div>
     )
   }
 
+  // ── Bubble corner radii ───────────────────────────────────────────────────
+  // Telegram-style: tail corner = 4px, others = 18px
+  const R = '18px'
+  const T = '4px'
+  const borderRadius = isOut
+    ? tail
+      ? `${R} ${R} ${T} ${R}`   // out + tail: sharp bottom-right
+      : `${R} ${R} ${R} ${R}`
+    : tail
+    ? `${R} ${R} ${R} ${T}`     // in + tail: sharp bottom-left
+    : `${R} ${R} ${R} ${R}`
+
+  const bubbleBg = isOut ? '#2b5278' : '#182533'
+  const mt = grouped ? '2px' : '8px'
+  // Add bottom margin when this is a tail bubble (visual separation between groups)
+  const mb = tail ? '2px' : '0'
+
   return (
     <div
-      className={clsx('flex items-end gap-2 px-3 group', isOut ? 'flex-row-reverse' : 'flex-row', showAvatar ? 'mt-2' : 'mt-0.5')}
-      onMouseEnter={() => setHovering(true)}
-      onMouseLeave={() => { setHovering(false); setShowDeleteMenu(false) }}
+      className={clsx('flex px-3 group/bubble', isOut ? 'justify-end' : 'justify-start')}
+      style={{ marginTop: mt, marginBottom: mb }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => { setHovered(false); setShowDeleteMenu(false) }}
     >
-      {/* Spacer where avatar would be on desktop */}
-      <div className="w-0 lg:w-0" />
-
-      {/* Bubble */}
-      <div className={clsx('relative max-w-[75%] lg:max-w-[65%]')}>
-        {/* Context actions */}
-        {hovering && !editing && (
+      <div className="relative max-w-[75%] lg:max-w-[60%]">
+        {/* ── Context action buttons ─────────────────────────────────── */}
+        {hovered && !editing && (
           <div
             className={clsx(
-              'absolute top-1 flex items-center gap-1 z-10',
-              isOut ? '-left-20' : '-right-20',
+              'absolute top-0 flex items-center gap-1 z-20',
+              isOut ? 'right-full pr-2' : 'left-full pl-2',
             )}
           >
-            {onReply && (
-              <button
-                onClick={() => onReply(message)}
-                className="p-1.5 rounded-lg bg-[#17212b] text-[#708499] hover:text-[#4d9eed] border border-[#0d1825] shadow"
-                title="Reply"
-              >
-                <CornerDownRight size={13} />
-              </button>
-            )}
+            <ActionBtn icon={<Reply size={13} />} label="Reply" onClick={() => onReply(message)} />
             {isOut && (
-              <button
+              <ActionBtn
+                icon={<Pencil size={13} />}
+                label="Edit"
                 onClick={() => { setEditing(true); setEditText(message.text ?? '') }}
-                className="p-1.5 rounded-lg bg-[#17212b] text-[#708499] hover:text-[#4d9eed] border border-[#0d1825] shadow"
-                title="Edit"
-              >
-                <Pencil size={13} />
-              </button>
+              />
             )}
-            <button
+            <ActionBtn
+              icon={<Trash2 size={13} />}
+              label="Delete"
+              danger
               onClick={() => setShowDeleteMenu((s) => !s)}
-              className="p-1.5 rounded-lg bg-[#17212b] text-[#708499] hover:text-red-400 border border-[#0d1825] shadow"
-              title="Delete"
-            >
-              <Trash2 size={13} />
-            </button>
-
+            />
             {showDeleteMenu && (
-              <div className="absolute top-8 right-0 bg-[#1c2b3a] border border-[#0d1825] rounded-xl shadow-2xl z-20 min-w-[140px] overflow-hidden">
+              <div
+                className={clsx(
+                  'absolute top-8 bg-[#1c2b3a] border border-[#243447] rounded-2xl shadow-2xl z-30 overflow-hidden min-w-[160px]',
+                  isOut ? 'right-0' : 'left-0',
+                )}
+              >
                 <button
                   onClick={() => deleteMessage(message.id, false)}
-                  className="w-full px-4 py-2.5 text-xs text-left text-[#e8eaed] hover:bg-[#2b5278] transition-colors"
+                  className="w-full px-4 py-3 text-sm text-left text-[#e8eaed] hover:bg-[#243447] transition-colors"
                 >
                   Delete for me
                 </button>
+                <div className="h-px bg-[#0d1825]" />
                 <button
                   onClick={() => deleteMessage(message.id, true)}
-                  className="w-full px-4 py-2.5 text-xs text-left text-red-400 hover:bg-red-500/15 transition-colors"
+                  className="w-full px-4 py-3 text-sm text-left text-red-400 hover:bg-red-500/10 transition-colors"
                 >
                   Delete for everyone
                 </button>
@@ -112,8 +133,12 @@ export function MessageBubble({ message, prevMessage, onReply }: Props) {
           </div>
         )}
 
+        {/* ── Bubble ────────────────────────────────────────────────── */}
         {editing ? (
-          <div className={clsx('rounded-2xl p-3 shadow-md', isOut ? 'bg-[#2b5278]' : 'bg-[#182533]')}>
+          <div
+            className="px-3 py-2.5 shadow-md"
+            style={{ background: bubbleBg, borderRadius }}
+          >
             <textarea
               value={editText}
               onChange={(e) => setEditText(e.target.value)}
@@ -123,43 +148,73 @@ export function MessageBubble({ message, prevMessage, onReply }: Props) {
               }}
               rows={3}
               autoFocus
-              className="w-full bg-transparent text-white text-sm resize-none outline-none"
+              className="w-full bg-transparent text-[#e8eaed] text-sm resize-none outline-none leading-relaxed min-w-[200px]"
             />
-            <div className="flex gap-2 justify-end mt-2">
-              <button onClick={() => setEditing(false)} className="text-[#708499] hover:text-white">
-                <X size={14} />
+            <div className="flex items-center justify-end gap-3 mt-1.5">
+              <button
+                onClick={() => setEditing(false)}
+                className="text-[#708499] hover:text-white text-xs flex items-center gap-1"
+              >
+                <X size={12} /> Cancel
               </button>
-              <button onClick={submitEdit} className="text-[#4d9eed] hover:text-white text-xs font-medium">
+              <button
+                onClick={submitEdit}
+                className="text-[#4d9eed] hover:text-white text-xs font-medium"
+              >
                 Save
               </button>
             </div>
           </div>
         ) : (
           <div
-            className={clsx(
-              'relative px-3 py-2 shadow-md',
-              isOut
-                ? 'bg-[#2b5278] rounded-tl-2xl rounded-br-2xl rounded-bl-2xl'
-                : 'bg-[#182533] rounded-tr-2xl rounded-br-2xl rounded-bl-2xl',
-              !showAvatar && (isOut ? 'rounded-tr-2xl' : 'rounded-tl-2xl'),
-            )}
+            className="px-3 py-2 shadow-sm"
+            style={{ background: bubbleBg, borderRadius }}
           >
+            {/* Message text */}
             <p className="text-[#e8eaed] text-sm whitespace-pre-wrap break-words leading-relaxed">
-              {renderText(message.text)}
+              {message.text ?? <span className="text-[#708499] italic">Media message</span>}
             </p>
-            <div className={clsx('flex items-center gap-1 mt-1', isOut ? 'justify-end' : 'justify-end')}>
+
+            {/* Footer: edited tag + time + tick */}
+            <div className={clsx('flex items-center gap-1.5 mt-0.5', isOut ? 'justify-end' : 'justify-end')}>
               {message.isEdited && (
                 <span className="text-[10px] text-[#708499]">edited</span>
               )}
-              <span className="text-[10px] text-[#708499]">{formatTime(message.date)}</span>
-              {isOut && (
-                <CheckCheck size={12} className="text-[#4d9eed]" />
+              <span className="text-[10px] text-[#708499] tabular-nums">{formatTime(message.date)}</span>
+              {isOut ? (
+                <CheckCheck size={13} className="text-[#4d9eed] flex-shrink-0" />
+              ) : (
+                <Check size={13} className="text-[#708499] flex-shrink-0" />
               )}
-              {!isOut && <Check size={12} className="text-[#708499]" />}
             </div>
           </div>
         )}
       </div>
     </div>
+  )
+}
+
+function ActionBtn({
+  icon,
+  label,
+  danger = false,
+  onClick,
+}: {
+  icon: React.ReactNode
+  label: string
+  danger?: boolean
+  onClick: () => void
+}) {
+  return (
+    <button
+      onClick={onClick}
+      title={label}
+      className={clsx(
+        'w-7 h-7 flex items-center justify-center rounded-full border border-[#243447] bg-[#17212b] shadow-lg transition-colors',
+        danger ? 'text-[#708499] hover:text-red-400 hover:border-red-500/40' : 'text-[#708499] hover:text-[#4d9eed] hover:border-[#4d9eed]/40',
+      )}
+    >
+      {icon}
+    </button>
   )
 }

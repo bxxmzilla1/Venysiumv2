@@ -9,20 +9,15 @@ import {
 } from 'react'
 import { Account, Chat, MeData, Message } from '../types/api'
 import { api, ApiError } from '../lib/api'
-import { getStoredApiKey, setStoredApiKey } from '../lib/storage'
 
-export type MobileView = 'chats' | 'messages' | 'contacts'
+export type MobileView = 'chats' | 'messages'
 
 interface AppState {
-  // ── Auth ──────────────────────────────────────────────────────────────────
-  apiKey: string
-  setApiKey: (key: string) => void
-  logout: () => void
-
-  // ── Bootstrap data ────────────────────────────────────────────────────────
+  // ── Bootstrap ─────────────────────────────────────────────────────────────
   me: MeData | null
-  meLoading: boolean
-  meError: string | null
+  bootstrapLoading: boolean
+  bootstrapError: string | null
+  retry: () => void
 
   // ── Accounts ──────────────────────────────────────────────────────────────
   accounts: Account[]
@@ -43,7 +38,7 @@ interface AppState {
   hasMoreMessages: boolean
   loadOlderMessages: () => Promise<void>
 
-  // ── Send / edit / delete ──────────────────────────────────────────────────
+  // ── Actions ───────────────────────────────────────────────────────────────
   sendMessage: (text: string, replyToId?: number) => Promise<void>
   editMessage: (msgId: number, newText: string) => Promise<void>
   deleteMessage: (msgId: number, revoke: boolean) => Promise<void>
@@ -57,59 +52,44 @@ interface AppState {
 const AppContext = createContext<AppState | null>(null)
 
 export function AppProvider({ children }: { children: ReactNode }) {
-  // ── Auth ──────────────────────────────────────────────────────────────────
-  const [apiKey, setApiKeyState] = useState<string>(getStoredApiKey)
-
-  function setApiKey(key: string) {
-    setApiKeyState(key)
-    setStoredApiKey(key)
-    if (!key) reset()
-  }
-
-  function logout() {
-    setApiKey('')
-  }
-
-  function reset() {
-    setMe(null)
-    setMeError(null)
-    setAccounts([])
-    setSelectedAccountState(null)
-    setChats([])
-    selectChat(null)
-    setMessages([])
-  }
-
   // ── Bootstrap ─────────────────────────────────────────────────────────────
   const [me, setMe] = useState<MeData | null>(null)
-  const [meLoading, setMeLoading] = useState(false)
-  const [meError, setMeError] = useState<string | null>(null)
+  const [bootstrapLoading, setBootstrapLoading] = useState(true)
+  const [bootstrapError, setBootstrapError] = useState<string | null>(null)
+  const [retryKey, setRetryKey] = useState(0)
+
+  const retry = useCallback(() => {
+    setBootstrapError(null)
+    setBootstrapLoading(true)
+    setRetryKey((k) => k + 1)
+  }, [])
 
   useEffect(() => {
-    if (!apiKey) return
-    setMeLoading(true)
-    setMeError(null)
+    setBootstrapLoading(true)
+    setBootstrapError(null)
 
-    Promise.all([api.getMe(apiKey), api.getAccounts(apiKey)])
+    Promise.all([api.getMe(), api.getAccounts()])
       .then(([meData, accts]) => {
         setMe(meData)
         setAccounts(accts)
         if (accts.length > 0) setSelectedAccountState(accts[0])
       })
       .catch((err: unknown) => {
-        const msg = err instanceof ApiError ? `${err.status}: ${err.message}` : 'Authentication failed'
-        setMeError(msg)
+        const msg =
+          err instanceof ApiError
+            ? `${err.message}`
+            : 'Failed to connect. Check your network.'
+        setBootstrapError(msg)
       })
-      .finally(() => setMeLoading(false))
-  }, [apiKey])
+      .finally(() => setBootstrapLoading(false))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [retryKey])
 
   // ── Accounts ──────────────────────────────────────────────────────────────
   const [accounts, setAccounts] = useState<Account[]>([])
   const [selectedAccount, setSelectedAccountState] = useState<Account | null>(null)
 
-  function setSelectedAccount(a: Account) {
-    setSelectedAccountState(a)
-  }
+  const setSelectedAccount = useCallback((a: Account) => setSelectedAccountState(a), [])
 
   // ── Chat list ─────────────────────────────────────────────────────────────
   const [chats, setChats] = useState<Chat[]>([])
@@ -117,146 +97,141 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [searchQuery, setSearchQuery] = useState('')
 
   const fetchChats = useCallback(async () => {
-    if (!apiKey) return
     try {
-      const items = await api.listChats(apiKey, { limit: 100 })
+      const items = await api.listChats({ limit: 100 })
       setChats(items)
     } catch {
-      // silently ignore polling errors
+      // silent polling errors
     }
-  }, [apiKey])
+  }, [])
 
   useEffect(() => {
-    if (!apiKey) return
+    if (!me) return
     setChatsLoading(true)
     fetchChats().finally(() => setChatsLoading(false))
     const id = setInterval(fetchChats, 15_000)
     return () => clearInterval(id)
-  }, [fetchChats, apiKey])
+  }, [fetchChats, me])
 
   // ── Selected chat + messages ───────────────────────────────────────────────
   const [selectedChat, setSelectedChatState] = useState<Chat | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
   const [messagesLoading, setMessagesLoading] = useState(false)
   const [hasMoreMessages, setHasMoreMessages] = useState(false)
-  const oldestMsgIdRef = useRef<number | undefined>(undefined)
+  const oldestIdRef = useRef<number | undefined>(undefined)
 
-  function selectChat(chat: Chat | null) {
+  const setSelectedChat = useCallback((chat: Chat | null) => {
     setSelectedChatState(chat)
     setMessages([])
     setHasMoreMessages(false)
-    oldestMsgIdRef.current = undefined
+    oldestIdRef.current = undefined
     if (chat) setMobileView('messages')
-  }
-
-  function setSelectedChat(chat: Chat | null) {
-    selectChat(chat)
-  }
+  }, [])
 
   const fetchMessages = useCallback(
     async (prepend = false, beforeId?: number) => {
-      if (!apiKey || !selectedChat) return
+      if (!selectedChat) return
       try {
-        const items = await api.listMessages(apiKey, selectedChat.id, {
+        const items = await api.listMessages(selectedChat.id, {
           account_id: selectedAccount?.id,
           limit: 50,
           before_message_id: beforeId,
         })
-        const ordered = [...items].reverse() // oldest → newest
+        const ordered = [...items].reverse()
 
         if (prepend) {
           setMessages((prev) => {
             const ids = new Set(prev.map((m) => m.id))
             const fresh = ordered.filter((m) => !ids.has(m.id))
+            if (fresh.length > 0) oldestIdRef.current = fresh[0].id
             return [...fresh, ...prev]
           })
           setHasMoreMessages(items.length === 50)
-          if (ordered.length > 0) oldestMsgIdRef.current = ordered[0].id
         } else {
           setMessages((prev) => {
-            const ids = new Set(prev.map((m) => m.id))
-            const merged = [...prev]
-            for (const m of ordered) {
-              if (!ids.has(m.id)) merged.push(m)
-            }
-            merged.sort((a, b) => a.id - b.id)
-            if (merged.length > 0) oldestMsgIdRef.current = merged[0].id
+            const map = new Map(prev.map((m) => [m.id, m]))
+            for (const m of ordered) map.set(m.id, m)
+            const merged = Array.from(map.values()).sort((a, b) => a.id - b.id)
+            if (merged.length > 0) oldestIdRef.current = merged[0].id
             return merged
           })
         }
       } catch {
-        // silently ignore
+        // silent
       }
     },
-    [apiKey, selectedChat, selectedAccount?.id],
+    [selectedChat, selectedAccount?.id],
   )
 
   useEffect(() => {
-    if (!selectedChat) {
-      setMessages([])
-      return
-    }
+    if (!selectedChat) { setMessages([]); return }
     setMessagesLoading(true)
     fetchMessages().finally(() => setMessagesLoading(false))
-
     const id = setInterval(() => fetchMessages(), 3_000)
     return () => clearInterval(id)
   }, [fetchMessages, selectedChat?.id])
 
-  async function loadOlderMessages() {
-    if (!oldestMsgIdRef.current) return
-    await fetchMessages(true, oldestMsgIdRef.current)
-  }
+  const loadOlderMessages = useCallback(async () => {
+    if (!oldestIdRef.current) return
+    await fetchMessages(true, oldestIdRef.current)
+  }, [fetchMessages])
 
-  // ── Send / edit / delete ──────────────────────────────────────────────────
+  // ── Actions ───────────────────────────────────────────────────────────────
   const [sending, setSending] = useState(false)
 
-  async function sendMessage(text: string, replyToId?: number) {
-    if (!apiKey || !selectedChat || !selectedAccount || !text.trim()) return
-    setSending(true)
-    try {
-      await api.sendMessage(apiKey, selectedChat.id, {
+  const sendMessage = useCallback(
+    async (text: string, replyToId?: number) => {
+      if (!selectedChat || !selectedAccount || !text.trim()) return
+      setSending(true)
+      try {
+        await api.sendMessage(selectedChat.id, {
+          accountId: selectedAccount.id,
+          idempotencyKey: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          text: text.trim(),
+          replyToMessageId: replyToId,
+        })
+        await fetchMessages()
+      } finally {
+        setSending(false)
+      }
+    },
+    [selectedChat, selectedAccount, fetchMessages],
+  )
+
+  const editMessage = useCallback(
+    async (msgId: number, newText: string) => {
+      if (!selectedChat || !selectedAccount) return
+      await api.editMessage(selectedChat.id, msgId, {
         accountId: selectedAccount.id,
-        idempotencyKey: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        text: text.trim(),
-        replyToMessageId: replyToId,
+        text: newText,
       })
       await fetchMessages()
-    } finally {
-      setSending(false)
-    }
-  }
+    },
+    [selectedChat, selectedAccount, fetchMessages],
+  )
 
-  async function editMessage(msgId: number, newText: string) {
-    if (!apiKey || !selectedChat || !selectedAccount) return
-    await api.editMessage(apiKey, selectedChat.id, msgId, {
-      accountId: selectedAccount.id,
-      text: newText,
-    })
-    await fetchMessages()
-  }
+  const deleteMessage = useCallback(
+    async (msgId: number, revoke: boolean) => {
+      if (!selectedChat) return
+      await api.deleteMessage(selectedChat.id, msgId, {
+        account_id: selectedAccount?.id,
+        revoke,
+      })
+      setMessages((prev) => prev.filter((m) => m.id !== msgId))
+    },
+    [selectedChat, selectedAccount?.id],
+  )
 
-  async function deleteMessage(msgId: number, revoke: boolean) {
-    if (!apiKey || !selectedChat) return
-    await api.deleteMessage(apiKey, selectedChat.id, msgId, {
-      account_id: selectedAccount?.id,
-      revoke,
-    })
-    setMessages((prev) => prev.filter((m) => m.id !== msgId))
-  }
-
-  // ── Mobile view ───────────────────────────────────────────────────────────
+  // ── Mobile ────────────────────────────────────────────────────────────────
   const [mobileView, setMobileView] = useState<MobileView>('chats')
 
   return (
     <AppContext.Provider
       value={{
-        apiKey,
-        setApiKey,
-        logout,
         me,
-        meLoading,
-        meError,
+        bootstrapLoading,
+        bootstrapError,
+        retry,
         accounts,
         selectedAccount,
         setSelectedAccount,
