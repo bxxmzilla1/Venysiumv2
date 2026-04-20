@@ -3,6 +3,18 @@ import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 
 export default defineConfig({
+  server: {
+    proxy: {
+      // Forward /api/* → https://api.entergram.com/* during local development,
+      // mirroring what the Vercel Edge Function does in production.
+      '/api': {
+        target: 'https://api.entergram.com',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api/, ''),
+        secure: true,
+      },
+    },
+  },
   plugins: [
     react(),
     VitePWA({

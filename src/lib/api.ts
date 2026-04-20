@@ -1,6 +1,8 @@
 import { Account, Chat, Contact, MeData, Message, Workspace } from '../types/api'
 
-const BASE = 'https://api.entergram.com'
+// In production (Vercel) this is proxied by api/[...path].ts (Edge Function).
+// In development Vite proxies /api → https://api.entergram.com via vite.config.ts.
+const BASE = '/api'
 
 export class ApiError extends Error {
   status: number
