@@ -134,7 +134,7 @@ export function AccountsPanel({ onBack }: Props) {
     const top = Math.max(0, (window.screen.height - h) / 2)
 
     const popup = window.open(
-      'https://app.entergram.com/settings/accounts',
+      'https://app.entergram.com',
       'entergram_connect',
       `width=${w},height=${h},left=${left},top=${top},toolbar=0,menubar=0,scrollbars=1`,
     )
@@ -227,7 +227,7 @@ export function AccountsPanel({ onBack }: Props) {
             <div className="text-left">
               <p className="text-[#4d9eed] font-semibold text-sm">Connect Telegram Account</p>
               <p className="text-[#708499] text-xs mt-0.5">
-                Opens Entergram — sign in and we'll detect it automatically
+                Opens Entergram — go to Settings → Accounts and connect yours
               </p>
             </div>
           </button>
@@ -241,9 +241,11 @@ export function AccountsPanel({ onBack }: Props) {
             <div>
               <p className="text-white font-semibold text-sm">Entergram is open</p>
               <p className="text-[#708499] text-xs mt-1 leading-relaxed">
-                Sign in to your Telegram account in the Entergram window.
-                <br />
-                This app will update automatically when you're done.
+                In the Entergram window, go to{' '}
+                <span className="text-white font-medium">Settings → Accounts</span>{' '}
+                and connect your Telegram account.
+                <br className="mb-1" />
+                This app will detect it automatically when you close the window.
               </p>
             </div>
             <div className="flex items-center justify-center gap-1.5 text-[#708499] text-xs">
@@ -293,7 +295,7 @@ export function AccountsPanel({ onBack }: Props) {
               Your browser blocked the popup. Allow popups for this site, or open Entergram manually:
             </p>
             <a
-              href="https://app.entergram.com/settings/accounts"
+              href="https://app.entergram.com"
               target="_blank"
               rel="noopener noreferrer"
               onClick={() => { setConnectState('checking') }}
