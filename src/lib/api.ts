@@ -61,7 +61,13 @@ export const api = {
     request<{ data: Workspace }>('/v1/workspace').then((r) => r.data),
 
   getAccounts: () =>
-    request<ListResp<Account>>('/v1/accounts').then((r) => r.data.items ?? []),
+    request<ListResp<Account>>('/v1/accounts')
+      .then((r) => r.data.items ?? [])
+      .catch((e) => {
+        // 404 means no accounts connected yet — treat as empty list
+        if (e instanceof ApiError && e.status === 404) return [] as Account[]
+        throw e
+      }),
 
   listChats: (params?: { limit?: number; offset?: number }) =>
     request<ListResp<Chat>>('/v1/chats' + qs(params)).then((r) => r.data.items ?? []),
