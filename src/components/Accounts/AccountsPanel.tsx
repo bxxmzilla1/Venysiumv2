@@ -10,6 +10,10 @@ import {
   Loader2,
   ExternalLink,
   WifiOff,
+  AlertCircle,
+  ChevronDown,
+  ChevronUp,
+  Info,
 } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
 import { Avatar } from '../common/Avatar'
@@ -18,7 +22,7 @@ import { Account } from '../../types/api'
 import clsx from 'clsx'
 
 export function accountLabel(a: Account): string {
-  return a.displayName ?? a.phoneNumber ?? `Account ${a.id.slice(-6)}`
+  return a.displayName ?? a.phoneNumber ?? `Account …${a.id.slice(-6)}`
 }
 
 // ── Account card ─────────────────────────────────────────────────────────────
@@ -52,9 +56,7 @@ function AccountCard({
       </div>
 
       <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
-          <p className="font-semibold text-white text-sm truncate">{name}</p>
-        </div>
+        <p className="font-semibold text-white text-sm truncate">{name}</p>
         <div className="flex items-center gap-1.5 mt-0.5">
           <Smartphone size={11} className="text-[#708499] flex-shrink-0" />
           <span className="text-xs text-[#708499] capitalize">{account.platform || 'telegram'}</span>
@@ -84,8 +86,68 @@ function AccountCard({
   )
 }
 
+// ── Diagnostics accordion ─────────────────────────────────────────────────────
+function DiagnosticsPanel({ me, accounts, lastError }: {
+  me: { workspace: { name: string; id: string } } | null
+  accounts: Account[]
+  lastError: string | null
+}) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="bg-[#0e1621] border border-[#1c2b3a] rounded-2xl overflow-hidden">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="w-full flex items-center gap-2 px-4 py-3 text-left hover:bg-[#1c2b3a] transition-colors"
+      >
+        <Info size={13} className="text-[#708499] flex-shrink-0" />
+        <span className="text-xs text-[#708499] flex-1">API Diagnostics</span>
+        {open ? <ChevronUp size={12} className="text-[#3d5267]" /> : <ChevronDown size={12} className="text-[#3d5267]" />}
+      </button>
+
+      {open && (
+        <div className="px-4 pb-4 space-y-2 border-t border-[#1c2b3a] pt-3">
+          <Row label="Workspace" value={me?.workspace.name ?? '—'} />
+          <Row label="Workspace ID" value={me?.workspace.id ?? '—'} mono />
+          <Row
+            label="Accounts from API"
+            value={`${accounts.length} found`}
+            ok={accounts.length > 0}
+          />
+          {accounts.map((a, i) => (
+            <Row key={a.id} label={`  Account ${i + 1}`} value={accountLabel(a)} mono />
+          ))}
+          {lastError && (
+            <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-3 mt-2">
+              <p className="text-red-400 text-[10px] font-mono break-all">{lastError}</p>
+            </div>
+          )}
+          <p className="text-[10px] text-[#3d5267] pt-1 leading-relaxed">
+            If Accounts from API shows 0, your Telegram account is not yet connected to this Entergram workspace.
+            Open Entergram and go to <span className="text-[#708499]">Settings → Telegram Accounts</span>.
+          </p>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function Row({ label, value, mono, ok }: { label: string; value: string; mono?: boolean; ok?: boolean }) {
+  return (
+    <div className="flex items-start gap-2">
+      <span className="text-[10px] text-[#3d5267] w-32 flex-shrink-0">{label}</span>
+      <span className={clsx(
+        'text-[10px] break-all flex-1',
+        ok === false ? 'text-amber-400' : ok === true ? 'text-green-400' : 'text-[#708499]',
+        mono && 'font-mono',
+      )}>
+        {value}
+      </span>
+    </div>
+  )
+}
+
 // ── Popup watcher state ───────────────────────────────────────────────────────
-type ConnectState = 'idle' | 'open' | 'checking' | 'success' | 'blocked'
+type ConnectState = 'idle' | 'open' | 'checking' | 'success' | 'blocked' | 'error'
 
 // ── Main panel ───────────────────────────────────────────────────────────────
 interface Props {
@@ -93,66 +155,75 @@ interface Props {
 }
 
 export function AccountsPanel({ onBack }: Props) {
-  const { accounts, accountsLoading, refreshAccounts, selectedAccount, setSelectedAccount } =
+  const { me, accounts, accountsLoading, refreshAccounts, selectedAccount, setSelectedAccount } =
     useApp()
 
   const [connectState, setConnectState] = useState<ConnectState>('idle')
+  const [checkCount, setCheckCount] = useState(0)
+  const [pollFound, setPollFound] = useState<number | null>(null)
+  const [lastError, setLastError] = useState<string | null>(null)
   const [prevCount, setPrevCount] = useState(accounts.length)
   const popupRef = useRef<Window | null>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const refreshTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  // Detect new account after popup closes
+  // Poll accounts every 3s while in checking state
   useEffect(() => {
-    if (connectState === 'checking') {
-      refreshTimerRef.current = setInterval(async () => {
-        await refreshAccounts()
-      }, 3000)
-    }
+    if (connectState !== 'checking') return
+
+    setCheckCount(0)
+    refreshTimerRef.current = setInterval(async () => {
+      setCheckCount((c) => c + 1)
+      try {
+        const accts = await refreshAccounts()
+        setPollFound(accts?.length ?? 0)
+        if ((accts?.length ?? 0) > prevCount) {
+          clearInterval(refreshTimerRef.current!)
+          setConnectState('success')
+          setTimeout(() => setConnectState('idle'), 3500)
+        }
+      } catch (e) {
+        setLastError(String(e))
+        clearInterval(refreshTimerRef.current!)
+        setConnectState('error')
+      }
+    }, 3000)
+
     return () => {
       if (refreshTimerRef.current) clearInterval(refreshTimerRef.current)
     }
-  }, [connectState, refreshAccounts])
-
-  // Watch if accounts count grew → success
-  useEffect(() => {
-    if (connectState === 'checking' && accounts.length > prevCount) {
-      if (refreshTimerRef.current) clearInterval(refreshTimerRef.current)
-      if (pollRef.current) clearInterval(pollRef.current)
-      setConnectState('success')
-      setTimeout(() => setConnectState('idle'), 3000)
-    }
-  }, [accounts.length, connectState, prevCount])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connectState])
 
   function handleConnect() {
     setPrevCount(accounts.length)
+    setPollFound(null)
+    setLastError(null)
+    setCheckCount(0)
     setConnectState('open')
 
-    const w = 920
-    const h = 680
+    const w = 960
+    const h = 700
     const left = Math.max(0, (window.screen.width - w) / 2)
     const top = Math.max(0, (window.screen.height - h) / 2)
 
     const popup = window.open(
       'https://app.entergram.com',
       'entergram_connect',
-      `width=${w},height=${h},left=${left},top=${top},toolbar=0,menubar=0,scrollbars=1`,
+      `width=${w},height=${h},left=${left},top=${top},toolbar=1,menubar=0,scrollbars=1`,
     )
 
     if (!popup) {
-      // Popup blocked by browser — fall back gracefully
       setConnectState('blocked')
       return
     }
 
     popupRef.current = popup
 
-    // Watch for the popup to close
     pollRef.current = setInterval(() => {
       if (popup.closed) {
-        if (pollRef.current) clearInterval(pollRef.current)
+        clearInterval(pollRef.current!)
         setConnectState('checking')
-        refreshAccounts()
       }
     }, 600)
   }
@@ -165,10 +236,13 @@ export function AccountsPanel({ onBack }: Props) {
   }
 
   async function handleManualRefresh() {
-    if (refreshTimerRef.current) clearInterval(refreshTimerRef.current)
-    setConnectState('checking')
-    await refreshAccounts()
-    setConnectState('idle')
+    setLastError(null)
+    try {
+      const accts = await refreshAccounts()
+      setPollFound(accts?.length ?? 0)
+    } catch (e) {
+      setLastError(String(e))
+    }
   }
 
   return (
@@ -185,7 +259,7 @@ export function AccountsPanel({ onBack }: Props) {
         <button
           onClick={handleManualRefresh}
           disabled={accountsLoading}
-          title="Refresh"
+          title="Refresh accounts"
           className="w-8 h-8 flex items-center justify-center rounded-full text-[#708499] hover:text-[#4d9eed] hover:bg-[#1c2b3a] transition-colors disabled:opacity-40"
         >
           {accountsLoading ? <Spinner size={14} /> : <RefreshCw size={14} />}
@@ -194,6 +268,23 @@ export function AccountsPanel({ onBack }: Props) {
 
       {/* ── Body ──────────────────────────────────────────────────── */}
       <div className="flex-1 overflow-y-auto px-3 py-4 space-y-4">
+
+        {/* ── Poll feedback (outside checking state) ─────────────── */}
+        {pollFound !== null && connectState === 'idle' && (
+          <div className={clsx(
+            'rounded-xl px-4 py-2.5 text-xs flex items-center gap-2',
+            (pollFound ?? 0) > 0
+              ? 'bg-green-500/10 border border-green-500/25 text-green-400'
+              : 'bg-amber-500/10 border border-amber-500/20 text-amber-300',
+          )}>
+            {(pollFound ?? 0) > 0
+              ? <CheckCircle2 size={13} />
+              : <AlertCircle size={13} />}
+            {(pollFound ?? 0) > 0
+              ? `${pollFound} account${pollFound !== 1 ? 's' : ''} found`
+              : 'API returned 0 accounts — see diagnostics below'}
+          </div>
+        )}
 
         {/* ── Accounts list ──────────────────────────────────────── */}
         {accounts.length > 0 && (
@@ -227,34 +318,43 @@ export function AccountsPanel({ onBack }: Props) {
             <div className="text-left">
               <p className="text-[#4d9eed] font-semibold text-sm">Connect Telegram Account</p>
               <p className="text-[#708499] text-xs mt-0.5">
-                Opens Entergram — go to Settings → Accounts and connect yours
+                Sign in to Entergram, go to Settings → Telegram Accounts
               </p>
             </div>
           </button>
         )}
 
         {connectState === 'open' && (
-          <div className="bg-[#0e1621] border border-[#243447] rounded-2xl p-5 text-center space-y-3">
-            <div className="w-14 h-14 mx-auto rounded-2xl bg-[#4d9eed]/15 flex items-center justify-center">
-              <ExternalLink size={26} className="text-[#4d9eed]" />
-            </div>
-            <div>
+          <div className="bg-[#0e1621] border border-[#243447] rounded-2xl p-5 space-y-4">
+            <div className="text-center space-y-2">
+              <div className="w-14 h-14 mx-auto rounded-2xl bg-[#4d9eed]/15 flex items-center justify-center">
+                <ExternalLink size={26} className="text-[#4d9eed]" />
+              </div>
               <p className="text-white font-semibold text-sm">Entergram is open</p>
-              <p className="text-[#708499] text-xs mt-1 leading-relaxed">
-                In the Entergram window, go to{' '}
-                <span className="text-white font-medium">Settings → Accounts</span>{' '}
-                and connect your Telegram account.
-                <br className="mb-1" />
-                This app will detect it automatically when you close the window.
-              </p>
             </div>
-            <div className="flex items-center justify-center gap-1.5 text-[#708499] text-xs">
+            <ol className="space-y-2">
+              {[
+                'Log in to Entergram if prompted',
+                'Go to Settings (gear icon)',
+                'Tap Telegram Accounts',
+                'Connect your Telegram account',
+                'Then close that window',
+              ].map((step, i) => (
+                <li key={i} className="flex items-start gap-2.5">
+                  <span className="w-5 h-5 rounded-full bg-[#2b5278] text-[#4d9eed] text-[10px] font-bold flex items-center justify-center flex-shrink-0 mt-0.5">
+                    {i + 1}
+                  </span>
+                  <span className="text-xs text-[#a0b8cc]">{step}</span>
+                </li>
+              ))}
+            </ol>
+            <div className="flex items-center justify-center gap-1.5 text-[#708499] text-xs pt-1">
               <Loader2 size={13} className="animate-spin" />
-              Waiting for you to finish…
+              Waiting for you to close the window…
             </div>
             <button
               onClick={handleCancel}
-              className="text-xs text-[#3d5267] hover:text-[#708499] transition-colors underline underline-offset-2"
+              className="w-full text-xs text-[#3d5267] hover:text-[#708499] transition-colors underline underline-offset-2"
             >
               Cancel
             </button>
@@ -265,14 +365,16 @@ export function AccountsPanel({ onBack }: Props) {
           <div className="bg-[#0e1621] border border-[#243447] rounded-2xl p-5 text-center space-y-3">
             <Loader2 size={28} className="animate-spin text-[#4d9eed] mx-auto" />
             <div>
-              <p className="text-white font-semibold text-sm">Checking for new account…</p>
-              <p className="text-[#708499] text-xs mt-1">Polling every 3 seconds</p>
+              <p className="text-white font-semibold text-sm">Checking for your account…</p>
+              <p className="text-[#708499] text-xs mt-1">
+                Check #{checkCount} · Currently {accounts.length} account{accounts.length !== 1 ? 's' : ''} in workspace
+              </p>
             </div>
             <button
-              onClick={() => setConnectState('idle')}
+              onClick={handleCancel}
               className="text-xs text-[#3d5267] hover:text-[#708499] transition-colors underline underline-offset-2"
             >
-              Cancel
+              Stop checking
             </button>
           </div>
         )}
@@ -281,7 +383,27 @@ export function AccountsPanel({ onBack }: Props) {
           <div className="bg-green-500/10 border border-green-500/30 rounded-2xl p-5 text-center space-y-2">
             <CheckCircle2 size={32} className="text-green-400 mx-auto" />
             <p className="text-green-400 font-semibold text-sm">Account connected!</p>
-            <p className="text-[#708499] text-xs">Your new Telegram account is ready to use.</p>
+            <p className="text-[#708499] text-xs">Your Telegram account is ready to use.</p>
+          </div>
+        )}
+
+        {connectState === 'error' && (
+          <div className="bg-red-500/10 border border-red-500/20 rounded-2xl p-4 space-y-2">
+            <div className="flex items-center gap-2">
+              <AlertCircle size={15} className="text-red-400 flex-shrink-0" />
+              <p className="text-red-300 font-semibold text-sm">API error while checking</p>
+            </div>
+            {lastError && (
+              <p className="text-[10px] text-red-400/80 font-mono break-all bg-red-500/5 rounded-lg p-2">
+                {lastError}
+              </p>
+            )}
+            <button
+              onClick={() => setConnectState('idle')}
+              className="text-xs text-[#708499] hover:text-white transition-colors underline underline-offset-2"
+            >
+              Dismiss
+            </button>
           </div>
         )}
 
@@ -292,17 +414,22 @@ export function AccountsPanel({ onBack }: Props) {
               <p className="text-amber-300 font-semibold text-sm">Popup was blocked</p>
             </div>
             <p className="text-[#708499] text-xs leading-relaxed">
-              Your browser blocked the popup. Allow popups for this site, or open Entergram manually:
+              Allow popups for this site, or open Entergram manually. When you're done, tap "I'm done" below.
             </p>
             <a
               href="https://app.entergram.com"
               target="_blank"
               rel="noopener noreferrer"
-              onClick={() => { setConnectState('checking') }}
               className="flex items-center justify-center gap-2 w-full bg-[#4d9eed] hover:bg-[#5ba3f0] text-white text-sm font-semibold py-2.5 rounded-xl transition-colors"
             >
               Open Entergram <ExternalLink size={14} />
             </a>
+            <button
+              onClick={() => setConnectState('checking')}
+              className="w-full text-xs text-[#4d9eed] hover:text-white transition-colors py-1"
+            >
+              I'm done — check for accounts now
+            </button>
             <button
               onClick={() => setConnectState('idle')}
               className="w-full text-xs text-[#3d5267] hover:text-[#708499] transition-colors"
@@ -312,24 +439,19 @@ export function AccountsPanel({ onBack }: Props) {
           </div>
         )}
 
-        {/* ── Info box ───────────────────────────────────────────── */}
+        {/* ── Empty state ────────────────────────────────────────── */}
         {accounts.length === 0 && connectState === 'idle' && (
-          <div className="flex flex-col items-center justify-center py-6 text-center gap-2">
-            <Smartphone size={36} className="text-[#2b5278]" />
-            <p className="text-[#708499] text-sm font-medium">No accounts yet</p>
-            <p className="text-[#3d5267] text-xs leading-relaxed max-w-[220px]">
-              Connect your Telegram account above to start sending messages
+          <div className="flex flex-col items-center justify-center py-4 text-center gap-2">
+            <Smartphone size={32} className="text-[#2b5278]" />
+            <p className="text-[#708499] text-sm font-medium">No accounts found</p>
+            <p className="text-[#3d5267] text-xs leading-relaxed max-w-[230px]">
+              Connect a Telegram account in Entergram, then tap the button above
             </p>
           </div>
         )}
 
-        <div className="bg-[#0e1621] border border-[#1c2b3a] rounded-2xl p-4">
-          <p className="text-xs text-[#708499] leading-relaxed">
-            <span className="text-[#e8eaed] font-medium">How it works: </span>
-            Entergram manages the Telegram connection securely. Once connected here, you can send
-            and read messages using that account from this app.
-          </p>
-        </div>
+        {/* ── Diagnostics ───────────────────────────────────────── */}
+        <DiagnosticsPanel me={me} accounts={accounts} lastError={lastError} />
       </div>
     </div>
   )

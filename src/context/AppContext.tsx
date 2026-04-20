@@ -22,7 +22,7 @@ interface AppState {
   // ── Accounts ──────────────────────────────────────────────────────────────
   accounts: Account[]
   accountsLoading: boolean
-  refreshAccounts: () => Promise<void>
+  refreshAccounts: () => Promise<Account[] | undefined>
   selectedAccount: Account | null
   setSelectedAccount: (a: Account) => void
 
@@ -104,6 +104,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         const still = accts.find((a) => a.id === prev?.id)
         return still ?? (accts[0] ?? null)
       })
+      return accts
     } finally {
       setAccountsLoading(false)
     }
