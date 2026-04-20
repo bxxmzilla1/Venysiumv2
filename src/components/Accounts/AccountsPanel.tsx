@@ -19,7 +19,16 @@ import { useApp } from '../../context/AppContext'
 import { Avatar } from '../common/Avatar'
 import { Spinner } from '../common/Spinner'
 import { Account } from '../../types/api'
+import { ApiError } from '../../lib/api'
 import clsx from 'clsx'
+
+function formatError(e: unknown): string {
+  if (e instanceof ApiError) {
+    const body = e.body ? JSON.stringify(e.body, null, 2) : ''
+    return `HTTP ${e.status}: ${e.message}${body ? '\n' + body : ''}`
+  }
+  return String(e)
+}
 
 export function accountLabel(a: Account): string {
   return a.displayName ?? a.phoneNumber ?? `Account …${a.id.slice(-6)}`
@@ -118,7 +127,7 @@ function DiagnosticsPanel({ me, accounts, lastError }: {
           ))}
           {lastError && (
             <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-3 mt-2">
-              <p className="text-red-400 text-[10px] font-mono break-all">{lastError}</p>
+              <pre className="text-red-400 text-[10px] font-mono whitespace-pre-wrap break-all max-h-32 overflow-y-auto">{lastError}</pre>
             </div>
           )}
           <p className="text-[10px] text-[#3d5267] pt-1 leading-relaxed">
@@ -183,7 +192,7 @@ export function AccountsPanel({ onBack }: Props) {
           setTimeout(() => setConnectState('idle'), 3500)
         }
       } catch (e) {
-        setLastError(String(e))
+        setLastError(formatError(e))
         clearInterval(refreshTimerRef.current!)
         setConnectState('error')
       }
@@ -241,7 +250,7 @@ export function AccountsPanel({ onBack }: Props) {
       const accts = await refreshAccounts()
       setPollFound(accts?.length ?? 0)
     } catch (e) {
-      setLastError(String(e))
+      setLastError(formatError(e))
     }
   }
 
@@ -394,9 +403,9 @@ export function AccountsPanel({ onBack }: Props) {
               <p className="text-red-300 font-semibold text-sm">API error while checking</p>
             </div>
             {lastError && (
-              <p className="text-[10px] text-red-400/80 font-mono break-all bg-red-500/5 rounded-lg p-2">
+              <pre className="text-[10px] text-red-400/80 font-mono whitespace-pre-wrap break-all bg-red-500/5 rounded-lg p-2 max-h-40 overflow-y-auto">
                 {lastError}
-              </p>
+              </pre>
             )}
             <button
               onClick={() => setConnectState('idle')}
