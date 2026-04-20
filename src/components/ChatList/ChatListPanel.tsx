@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Search, X, ChevronDown, Edit2 } from 'lucide-react'
+import { Search, X, ChevronDown, Edit2, Settings } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
 import { ChatItem } from './ChatItem'
 import { Avatar } from '../common/Avatar'
@@ -11,7 +11,11 @@ function accountLabel(a: Account): string {
   return a.displayName ?? a.phoneNumber ?? a.owner.displayName ?? `Account ${a.id.slice(-4)}`
 }
 
-export function ChatListPanel() {
+interface Props {
+  onOpenAccounts: () => void
+}
+
+export function ChatListPanel({ onOpenAccounts }: Props) {
   const {
     me,
     accounts,
@@ -45,9 +49,18 @@ export function ChatListPanel() {
           <h1 className="font-bold text-white text-lg leading-tight truncate">{workspaceName}</h1>
           <p className="text-[#708499] text-xs leading-tight">Entergram</p>
         </div>
-        <button className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-[#1c2b3a] text-[#708499] hover:text-white transition-colors">
-          <Edit2 size={16} />
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={onOpenAccounts}
+            title="Telegram Accounts"
+            className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-[#1c2b3a] text-[#708499] hover:text-white transition-colors"
+          >
+            <Settings size={16} />
+          </button>
+          <button className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-[#1c2b3a] text-[#708499] hover:text-white transition-colors">
+            <Edit2 size={16} />
+          </button>
+        </div>
       </div>
 
       {/* ── Account selector ───────────────────────────────────────────── */}

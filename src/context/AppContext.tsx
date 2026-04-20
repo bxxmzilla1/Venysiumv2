@@ -21,6 +21,8 @@ interface AppState {
 
   // ── Accounts ──────────────────────────────────────────────────────────────
   accounts: Account[]
+  accountsLoading: boolean
+  refreshAccounts: () => Promise<void>
   selectedAccount: Account | null
   setSelectedAccount: (a: Account) => void
 
@@ -87,9 +89,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   // ── Accounts ──────────────────────────────────────────────────────────────
   const [accounts, setAccounts] = useState<Account[]>([])
+  const [accountsLoading, setAccountsLoading] = useState(false)
   const [selectedAccount, setSelectedAccountState] = useState<Account | null>(null)
 
   const setSelectedAccount = useCallback((a: Account) => setSelectedAccountState(a), [])
+
+  const refreshAccounts = useCallback(async () => {
+    setAccountsLoading(true)
+    try {
+      const accts = await api.getAccounts()
+      setAccounts(accts)
+      // Keep selected account if still present, else pick first
+      setSelectedAccountState((prev) => {
+        const still = accts.find((a) => a.id === prev?.id)
+        return still ?? (accts[0] ?? null)
+      })
+    } finally {
+      setAccountsLoading(false)
+    }
+  }, [])
 
   // ── Chat list ─────────────────────────────────────────────────────────────
   const [chats, setChats] = useState<Chat[]>([])
@@ -233,6 +251,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         bootstrapError,
         retry,
         accounts,
+        accountsLoading,
+        refreshAccounts,
         selectedAccount,
         setSelectedAccount,
         chats,
